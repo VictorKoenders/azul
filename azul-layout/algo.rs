@@ -332,10 +332,16 @@ fn compute_internal<T: GetTextLayout>(
             None => (available_space.width, available_space.height),
         };
 
+        println!("(node_hierarchy.first_child.is_none) - setting size of nodeID: {:?} to {:?}", node_id, RectSize {
+            width: parent_node_width + padding_border.horizontal(),
+            height: parent_node_height + padding_border.vertical(),
+        });
+
         node_rects[node_id].size = RectSize {
             width: parent_node_width + padding_border.horizontal(),
             height: parent_node_height + padding_border.vertical(),
         };
+
         node_rects[node_id].margin = resolve_offsets(margin);
         node_rects[node_id].padding = resolve_offsets(padding);
         node_rects[node_id].border_widths = resolve_offsets(border);
@@ -483,6 +489,11 @@ fn compute_internal<T: GetTextLayout>(
             child.size.height
         };
 
+        println!("calling compute internal (flex basis determination) with node_size: {:?}, parent_size: {:?}!", Size {
+                width: width.maybe_max(child.min_size.width).maybe_min(child.max_size.width),
+                height: height.maybe_max(child.min_size.height).maybe_min(child.max_size.height),
+            }, available_space);
+
         compute_internal(
             child.node_id,
             node_hierarchy,
@@ -518,6 +529,10 @@ fn compute_internal<T: GetTextLayout>(
         // webkit handled various scenarios. Can probably be solved better by passing in
         // min-content max-content constraints from the top
 
+        println!("calling compute internal (main size calculation) with node_size: {:?}, parent_size: {:?}!",
+                 Size { width: Undefined, height: Undefined }, available_space
+        );
+
         compute_internal(
             child.node_id,
             node_hierarchy,
@@ -535,6 +550,8 @@ fn compute_internal<T: GetTextLayout>(
         .main(dir)
         .maybe_max(child.min_size.main(dir))
         .maybe_min(child.size.main(dir));
+
+        println!("min main ({:?}): {:?}", child.node_id, min_main);
 
         child.hypothetical_inner_size.set_main(dir, child.flex_basis.maybe_max(min_main).maybe_min(child.max_size.main(dir)));
         child.hypothetical_outer_size.set_main(dir, child.hypothetical_inner_size.main(dir) + child.margin.main(dir));
@@ -613,6 +630,13 @@ fn compute_internal<T: GetTextLayout>(
             // TODO - This is not found by reading the spec. Maybe this can be done in some other place
             // instead. This was found by trail and error fixing tests to align with webkit output.
             if node_inner_size.main(dir).is_undefined() && is_row {
+
+                println!("calling compute internal (Size inflexible items) with node_size: {:?}, parent_size: {:?}!",
+                    Size {
+                         width: child.size.width.maybe_max(child.min_size.width).maybe_min(child.max_size.width),
+                         height: child.size.height.maybe_max(child.min_size.height).maybe_min(child.max_size.height),
+                     }, available_space
+                );
 
                 compute_internal(
                     child.node_id,
@@ -771,6 +795,11 @@ fn compute_internal<T: GetTextLayout>(
                 // webkit handled various scenarios. Can probably be solved better by passing in
                 // min-content max-content constraints from the top. Need to figure out correct thing to do here as
                 // just piling on more conditionals.
+
+                println!("calling compute internal (Fix min/max violations) with node_size: {:?}, parent_size: {:?}!",
+                    Size { width: Undefined, height: Undefined }, available_space
+                );
+
                 compute_internal(
                     child.node_id,
                     node_hierarchy,
@@ -845,8 +874,19 @@ fn compute_internal<T: GetTextLayout>(
 
     flex_lines.iter_mut().for_each(|line| {
         line.items.iter_mut().for_each(|child| {
-            let child_cross =
-                child.size.cross(dir).maybe_max(child.min_size.cross(dir)).maybe_min(child.max_size.cross(dir));
+            let child_cross = child.size.cross(dir)
+                .maybe_max(child.min_size.cross(dir))
+                .maybe_min(child.max_size.cross(dir));
+
+            println!("calling compute internal (hypothetical cross size) with node_size: {:?}, parent_size: {:?}!",
+                Size {
+                    width: if is_row { child.target_size.width.to_number() } else { child_cross },
+                    height: if is_row { child_cross } else { child.target_size.height.to_number() },
+                }, Size {
+                    width: if is_row { container_size.main(dir).to_number() } else { available_space.width },
+                    height: if is_row { available_space.height } else { container_size.main(dir).to_number() },
+                },
+            );
 
             compute_internal(
                 child.node_id,
@@ -887,6 +927,24 @@ fn compute_internal<T: GetTextLayout>(
     if has_baseline_child {
         flex_lines.iter_mut().for_each(|line| {
             line.items.iter_mut().for_each(|child| {
+
+                println!("calling compute internal (hypothetical cross size with baseline child) with node_size: {:?}, parent_size: {:?}!",
+                    Size {
+                        width: if is_row {
+                            child.target_size.width.to_number()
+                        } else {
+                            child.hypothetical_inner_size.width.to_number()
+                        },
+                        height: if is_row {
+                            child.hypothetical_inner_size.height.to_number()
+                        } else {
+                            child.target_size.height.to_number()
+                        },
+                    }, Size {
+                        width: if is_row { container_size.width.to_number() } else { node_size.width },
+                        height: if is_row { node_size.height } else { container_size.height.to_number() },
+                    },
+                );
                 compute_internal(
                     child.node_id,
                     node_hierarchy,
@@ -1187,6 +1245,7 @@ fn compute_internal<T: GetTextLayout>(
     // We have the container size. If our caller does not care about performing
     // layout we are done now.
     if !perform_layout {
+        println!("(!perform_layout) - setting size of nodeID: {:?} to {:?}", node_id, container_size);
         node_rects[node_id].size = RectSize {
             width: parent_width.or_else(Number::Defined(container_size.width)),
             height: parent_height.or_else(Number::Defined(container_size.height)),
@@ -1306,6 +1365,10 @@ fn compute_internal<T: GetTextLayout>(
                     Undefined
                 });
 
+            println!("calling compute internal (performing absolute layout) with node_size: {:?}, parent_size: {:?}!",
+                Size { width, height }, Size { width: container_width, height: container_height },
+            );
+
             compute_internal(
                 child_id,
                 node_hierarchy,
@@ -1392,6 +1455,7 @@ fn compute_internal<T: GetTextLayout>(
     // TODO: Ordering!
     // children.sort_by(|c1, c2| c1.order.cmp(&c2.order));
 
+    println!("(end of algo function) - setting size of nodeID: {:?} to {:?}", node_id, container_size);
     node_rects[node_id].size = RectSize {
         width: parent_width.or_else(Number::Defined(container_size.width)),
         height: parent_height.or_else(Number::Defined(container_size.height)),
@@ -1477,6 +1541,9 @@ fn layout_item<T: GetTextLayout>(
     let is_row = dir.is_row();
     let is_column = dir.is_column();
 
+    println!("calling compute internal (layout item) with node_size: {:?}, parent_size: {:?}!",
+        child.target_size.map(|s| s.to_number()), container_size.map(|s| s.to_number()),
+    );
     compute_internal(
         child.node_id,
         node_hierarchy,
